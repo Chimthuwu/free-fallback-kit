@@ -880,6 +880,13 @@ Once done, `provider: nous` in `config.yaml` just works.
 | Cohere | `provider: custom`, `base_url: https://api.cohere.ai/compatibility/v1` — this is Cohere's OpenAI-compatibility layer, not its native `v2/chat` shape |
 | 2nd OpenRouter account | same `provider: openrouter` — register as a credential pool (Step 05a), not a second `fallback_providers` entry |
 
+**Two more, advanced — skip these unless the user specifically asks:** Cloudflare
+Workers AI is real (10,000 Neurons/day) but its base URL has the account ID baked in, so
+it needs `--account-id` when verifying (`GUIDE.md` → *Step 2*). Hugging Face is wired
+into `discover_free_models.py --provider huggingface` but, checked live, currently has
+zero models flagged genuinely free — its "free tier" is a one-time $0.10/month credit,
+not a bucket. Don't walk a user through either unless they bring it up.
+
 Once everything's pasted into the file in Step 05, verify each key before it enters the
 chain:
 

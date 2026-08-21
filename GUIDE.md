@@ -99,10 +99,16 @@ python scripts/discover_free_models.py                 # probe every :free model
 python scripts/discover_free_models.py --require-tools # agents only: tool-calling
 python scripts/discover_free_models.py --provider groq # any OpenAI-compatible provider
 python scripts/discover_free_models.py --json          # machine-readable chain
+python scripts/discover_free_models.py --concurrency 8 # probe more candidates at once
 ```
 
-The script calls each model for real and prints `LIVE` / `DEAD` with latency. Pick from
-the `LIVE` rows, and pick on the axis your workload actually cares about:
+The script calls each model for real and prints `LIVE` / `DEAD` with latency — up to
+`--concurrency` (default 4) of them at once over a thread pool, since this is
+network-bound waiting, not CPU work, so probing 20 candidates takes roughly a quarter
+of the time it'd take one at a time. Drop it to `--concurrency 1` against anything with
+a strict per-IP limit, like OVHcloud's 2 requests/min — parallel requests there just
+turn into parallel 429s. Pick from the `LIVE` rows, and pick on the axis your workload
+actually cares about:
 
 | Workload | Rank by |
 |---|---|
@@ -149,14 +155,33 @@ only** — 20 requests/min, 1,000 calls/month, fine for hobby work, not for anyt
 that bills a customer. **OVHcloud needs no key at all**, but caps at 2 requests/min per
 IP — treat it as a last-resort bucket that survives a total outage, not a daily driver.
 
-Two more are usable but don't fit the `--provider` shortcut, so wire them with
-`--base-url` instead: **Hugging Face** (`https://router.huggingface.co/v1`) mixes free
-and metered models *inside one catalog entry* — its `/models` response nests pricing
-per backing provider rather than marking the model id itself, so check each entry's
-`is_free` field before trusting it, don't assume every id in the list is free.
-**Cloudflare Workers AI** is OpenAI-compatible too, but its base URL has your account ID
-baked in (`.../accounts/<ACCOUNT_ID>/ai/v1`), so it can't be a fixed constant the way the
-others are.
+**Hugging Face** (`https://router.huggingface.co/v1`, `--provider huggingface`) is wired
+in, but check what it actually gives you before counting on it: its `/models` response
+nests pricing *per backing provider* rather than on the model id itself, so
+`discover_free_models.py` flattens each model into one candidate per backend and, by
+default, keeps only backends flagged `is_free`. As of this writing that flag is `false`
+on every single backend in the catalog — the real "free tier" here is a one-time **$0.10
+in monthly credits for free accounts**, spent on whatever paid model you call, not a
+standing free bucket. Running the script against it costs nothing (it'll correctly find
+zero candidates and exit), but don't plan a chain entry around it unless HF starts
+flagging models `is_free` again — check with `--provider huggingface --all` to see
+current pricing per backend.
+
+**Cloudflare Workers AI** (`https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1`)
+is OpenAI-compatible and genuinely free — 10,000 Neurons/day, shared account-wide — but
+its base URL has your account ID baked in, so it can't be a fixed constant the way the
+others are. `discover_free_models.py` fills in a literal `{account_id}` placeholder from
+`--account-id` or `$CLOUDFLARE_ACCOUNT_ID`:
+
+```bash
+python scripts/discover_free_models.py \
+    --base-url https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1 \
+    --key-env CLOUDFLARE_API_TOKEN --account-id $CLOUDFLARE_ACCOUNT_ID
+```
+
+Get the token from the Workers AI page in the dashboard → **Use REST API** → **Create a
+Workers AI API Token** (needs *Workers AI - Read* and *Workers AI - Edit*); your account
+ID is on the same dashboard, in the right-hand sidebar of any account overview page.
 
 ---
 

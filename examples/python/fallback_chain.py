@@ -51,6 +51,10 @@ PROVIDER_BASES = {
     "nvidia": "https://integrate.api.nvidia.com/v1",
     "mistral": "https://api.mistral.ai/v1",
     "cohere": "https://api.cohere.ai/compatibility/v1",  # Cohere's own v2/chat is not this dialect
+    "huggingface": "https://router.huggingface.co/v1",
+    # Cloudflare Workers AI has no fixed base_url -- the account ID is baked into
+    # the path, so it only ever arrives here via a models.json entry that already
+    # carries its own base_url (see scripts/discover_free_models.py --account-id).
 }
 
 # First variable listed is the primary key; the rest form the rotation pool.
@@ -62,6 +66,7 @@ PROVIDER_KEY_ENVS = {
     "nvidia": ["NVIDIA_API_KEY"],
     "mistral": ["MISTRAL_API_KEY"],
     "cohere": ["COHERE_API_KEY"],
+    "huggingface": ["HF_TOKEN"],
 }
 
 # Last-resort ids, used only when a provider's own model listing is unreachable.

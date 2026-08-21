@@ -10,11 +10,19 @@ Usage:
     python discover_free_models.py                      # OpenRouter :free models
     python discover_free_models.py --require-tools      # agents: tool-calling only
     python discover_free_models.py --provider mistral   # a known provider
+    python discover_free_models.py --provider huggingface --key-env HF_TOKEN
+                                                          # only truly is_free backends
     python discover_free_models.py --base-url https://api.cerebras.ai/v1 \
                                    --key-env CEREBRAS_API_KEY
     python discover_free_models.py --base-url https://oai.endpoints.kepler.ai.cloud.ovh.net/v1 \
-                                   --no-key              # OVHcloud: no signup, no key
+                                   --no-key --concurrency 1
+                                                          # OVHcloud: no signup, no key,
+                                                          # but only 2 requests/min per IP
+    python discover_free_models.py \
+        --base-url https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1 \
+        --key-env CLOUDFLARE_API_TOKEN --account-id $CLOUDFLARE_ACCOUNT_ID
     python discover_free_models.py --rank latency       # interactive workloads
+    python discover_free_models.py --concurrency 8      # probe more candidates at once
     python discover_free_models.py --json > models.json # machine-readable chain
     python discover_free_models.py --prompt "Translate to Swedish: good evening"
 
@@ -31,6 +39,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Every provider here speaks the OpenAI chat-completions dialect.
 PROVIDERS = {
@@ -43,6 +52,9 @@ PROVIDERS = {
     # Cohere's own v2/chat shape is not OpenAI-compatible -- this is their
     # separate compatibility layer, which speaks the same dialect as the rest.
     "cohere": ("https://api.cohere.ai/compatibility/v1", "COHERE_API_KEY"),
+    # HF's /models response nests pricing per backing provider rather than
+    # marking the model id itself -- see expand_huggingface() below.
+    "huggingface": ("https://router.huggingface.co/v1", "HF_TOKEN"),
 }
 
 # Some provider edges (Cloudflare) reject default Python user-agents with a
@@ -67,6 +79,8 @@ SIGNATURES = [
     ("user not found", "BAD-KEY",
      "The key was rejected. Check it, or that it belongs to this provider."),
     ("invalid api key", "BAD-KEY",
+     "The key was rejected. Check it, or that it belongs to this provider."),
+    ("incorrect api key", "BAD-KEY",
      "The key was rejected. Check it, or that it belongs to this provider."),
     ("no auth credentials", "BAD-KEY",
      "No usable credential was sent."),
@@ -126,6 +140,35 @@ def score_model(model):
     return score
 
 
+def expand_huggingface(data, free_only):
+    """Flatten HF's router catalog into one synthetic candidate per (model, backend).
+
+    Unlike every other provider here, an id in this catalog is not itself free
+    or paid -- each model lists several backing providers, and only some of
+    those are marked is_free. Auto-routing (just the bare model id) can still
+    land on a paid backend, so each candidate is pinned to its backend with
+    HF's own "<model>:<provider>" syntax rather than left to auto-route.
+    """
+    flat = []
+    for model in data:
+        mid = model.get("id")
+        if not mid:
+            continue
+        for backend in model.get("providers") or []:
+            if backend.get("status") != "live":
+                continue
+            if free_only and not backend.get("is_free"):
+                continue
+            flat.append({
+                "id": f"{mid}:{backend.get('provider')}",
+                "name": mid,
+                "description": "",
+                "context_length": backend.get("context_length") or 0,
+                "supported_parameters": ["tools"] if backend.get("supports_tools") else [],
+            })
+    return flat
+
+
 def http_json(url, key, payload=None, timeout=90):
     headers = {"User-Agent": UA}
     if key:
@@ -138,11 +181,38 @@ def http_json(url, key, payload=None, timeout=90):
         return json.load(fh)
 
 
-def list_models(base_url, key, timeout, free_only):
+def list_models(provider, base_url, key, timeout, free_only):
     data = http_json(base_url.rstrip("/") + "/models", key, timeout=timeout)["data"]
-    if free_only:
+    if provider == "huggingface":
+        data = expand_huggingface(data, free_only)
+    elif free_only:
         data = [m for m in data if m.get("id", "").endswith(":free")]
     return data
+
+
+def error_detail(exc):
+    """Best-effort human-readable message from an API's error body.
+
+    Every provider here wraps errors differently: OpenAI/OpenRouter/Groq nest
+    {"error": {"message": ...}}, Mistral returns a bare {"detail": ...}, and
+    Cohere returns {"message": ...} next to an unrelated "id" field. Reading
+    only the first shape silently degrades real errors from the other two to
+    a bare "HTTP 401", which then fails to match anything in classify().
+    """
+    try:
+        body = json.loads(exc.read().decode())
+    except Exception:
+        return f"HTTP {exc.code}"
+    if isinstance(body, dict):
+        err = body.get("error")
+        if isinstance(err, dict) and err.get("message"):
+            return str(err["message"])
+        if isinstance(err, str) and err:
+            return err
+        for key in ("detail", "message"):
+            if body.get(key):
+                return str(body[key])
+    return f"HTTP {exc.code}"
 
 
 def probe(base_url, key, model_id, prompt, timeout):
@@ -154,11 +224,7 @@ def probe(base_url, key, model_id, prompt, timeout):
     try:
         body = http_json(base_url.rstrip("/") + "/chat/completions", key, payload, timeout)
     except urllib.error.HTTPError as exc:
-        try:
-            detail = json.loads(exc.read().decode())["error"]["message"]
-        except Exception:
-            detail = f"HTTP {exc.code}"
-        return False, time.time() - started, detail
+        return False, time.time() - started, error_detail(exc)
     except Exception as exc:  # network, TLS, timeout
         return False, time.time() - started, str(exc)
 
@@ -184,8 +250,10 @@ def main():
     ap.add_argument("--key", help="key value (default: read the provider's env var)")
     ap.add_argument("--no-key", action="store_true",
                     help="provider needs no key at all (e.g. OVHcloud AI Endpoints)")
+    ap.add_argument("--account-id", help="fills {account_id} in --base-url "
+                    "(default: $CLOUDFLARE_ACCOUNT_ID) -- Cloudflare Workers AI needs this")
     ap.add_argument("--all", action="store_true",
-                    help="probe paid models too, not just :free ones")
+                    help="probe paid models too, not just free ones")
     ap.add_argument("--require-tools", action="store_true",
                     help="keep only models advertising tool-calling (agents need this)")
     ap.add_argument("--rank", default="score", choices=("score", "latency", "context"),
@@ -194,6 +262,9 @@ def main():
     ap.add_argument("--prompt", default="Reply with the single word: ready",
                     help="probe prompt; use a real one from your workload")
     ap.add_argument("--timeout", type=int, default=90, help="per-request timeout, seconds")
+    ap.add_argument("--concurrency", type=int, default=4,
+                    help="candidates probed in parallel (default: 4). Drop to 1 for "
+                    "providers with a strict per-IP limit, e.g. OVHcloud's 2 req/min")
     ap.add_argument("--json", action="store_true",
                     help="emit a machine-readable chain on stdout instead of a report")
     args = ap.parse_args()
@@ -208,6 +279,14 @@ def main():
         base_url, key_env = PROVIDERS[args.provider]
         provider = args.provider
 
+    if "{account_id}" in base_url:
+        account_id = args.account_id or os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+        if not account_id:
+            print("error: --base-url contains {account_id} -- pass --account-id or "
+                  "set CLOUDFLARE_ACCOUNT_ID", file=sys.stderr)
+            return 1
+        base_url = base_url.replace("{account_id}", account_id)
+
     key = args.key or os.environ.get(key_env)
     if not key and not args.no_key:
         print(f"error: no key. Set {key_env}, pass --key, or pass --no-key "
@@ -215,10 +294,10 @@ def main():
         return 1
 
     out = sys.stderr if args.json else sys.stdout
-    free_only = not args.all and provider == "openrouter"
+    free_only = not args.all and provider in ("openrouter", "huggingface")
 
     try:
-        catalog = list_models(base_url, key, args.timeout, free_only)
+        catalog = list_models(provider, base_url, key, args.timeout, free_only)
     except Exception as exc:
         print(f"error: could not list models from {base_url}: {exc}", file=sys.stderr)
         return 1
@@ -243,20 +322,29 @@ def main():
     if args.limit:
         candidates = candidates[: args.limit]
 
-    print(f"\nProbing {len(candidates)} candidates with a real request\n", file=out)
+    concurrency = max(1, args.concurrency)
+    print(f"\nProbing {len(candidates)} candidates with a real request "
+          f"({concurrency} at a time)\n", file=out)
 
+    # Real network calls, not CPU work -- a thread pool is the right tool, and
+    # the only shared state (usable, policy_blocked, stdout) is only ever
+    # touched from this thread as futures complete, so no lock is needed.
     usable, policy_blocked = [], 0
-    for score, ctx, mid in candidates:
-        ok, elapsed, detail = probe(base_url, key, mid, args.prompt, args.timeout)
-        if ok:
-            usable.append({"provider": provider, "model": mid, "base_url": base_url,
-                           "key_env": key_env or None, "context": ctx,
-                           "latency_s": round(elapsed, 2), "score": round(score, 1)})
-            print(f"  LIVE      {mid:<52} {elapsed:5.1f}s  ctx={ctx:<9} {detail}", file=out)
-        else:
-            label, meaning = classify(detail)
-            policy_blocked += label == "DATA-POLICY"
-            print(f"  {label:<9} {mid:<52} {meaning[:60]}", file=out)
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        futures = {pool.submit(probe, base_url, key, mid, args.prompt, args.timeout):
+                   (score, ctx, mid) for score, ctx, mid in candidates}
+        for future in as_completed(futures):
+            score, ctx, mid = futures[future]
+            ok, elapsed, detail = future.result()
+            if ok:
+                usable.append({"provider": provider, "model": mid, "base_url": base_url,
+                               "key_env": key_env or None, "context": ctx,
+                               "latency_s": round(elapsed, 2), "score": round(score, 1)})
+                print(f"  LIVE      {mid:<52} {elapsed:5.1f}s  ctx={ctx:<9} {detail}", file=out)
+            else:
+                label, meaning = classify(detail)
+                policy_blocked += label == "DATA-POLICY"
+                print(f"  {label:<9} {mid:<52} {meaning[:60]}", file=out)
 
     print(f"\n{'=' * 78}", file=out)
     print(f"{len(usable)} usable, {len(candidates) - len(usable)} failed\n", file=out)

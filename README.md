@@ -133,22 +133,37 @@ CHAIN    only once a provider's keys are all spent
 All free, none need a card unless noted. Every OpenAI-compatible one works with a base
 URL and a key — no new SDK.
 
-| Provider | Signup | Endpoint | Notes |
+| Provider | Get a key | `--provider` | Notes |
 |---|---|---|---|
-| OpenRouter | https://openrouter.ai/settings/keys | `https://openrouter.ai/api/v1` | account-wide daily cap across every `:free` model |
-| Google AI Studio | https://aistudio.google.com/apikey | `https://generativelanguage.googleapis.com/v1beta/openai/` | meters per model per day — two models, two allowances |
-| Groq | https://console.groq.com/keys | `https://api.groq.com/openai/v1` | fast, generous, independent of the rest |
-| Cerebras | https://cloud.cerebras.ai/ | `https://api.cerebras.ai/v1` | verify — a valid key can still 402 with no active free allowance |
-| NVIDIA NIM | https://build.nvidia.com/ | `https://integrate.api.nvidia.com/v1` | | 
-| Mistral AI | https://console.mistral.ai/api-keys | `https://api.mistral.ai/v1` | ~1 req/s, 500K TPM, ~1B tokens/month |
-| Cohere (compat layer) | https://dashboard.cohere.com/api-keys | `https://api.cohere.ai/compatibility/v1` | trial key, 20 RPM/1,000 calls-month, **non-commercial only** |
-| OVHcloud AI Endpoints | *none — no signup, no key* | `https://oai.endpoints.kepler.ai.cloud.ovh.net/v1` | 2 RPM per IP — last-resort bucket, EU-hosted |
+| OpenRouter | [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys) | `openrouter` | account-wide daily cap across every `:free` model |
+| Google AI Studio | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | `gemini` | meters per model per day — two models, two allowances |
+| Groq | [console.groq.com/keys](https://console.groq.com/keys) | `groq` | fast, generous, independent of the rest |
+| Cerebras | [cloud.cerebras.ai](https://cloud.cerebras.ai/) → **API Keys** | `cerebras` | verify — a valid key can still 402 with no active free allowance |
+| NVIDIA NIM | [build.nvidia.com](https://build.nvidia.com/) → profile → API Keys | `nvidia` | 100+ models; needs NVIDIA Developer Program membership |
+| Mistral AI | [console.mistral.ai/api-keys](https://console.mistral.ai/api-keys) | `mistral` | ~1 req/s, 500K TPM, ~1B tokens/month |
+| Cohere (compat layer) | [dashboard.cohere.com/api-keys](https://dashboard.cohere.com/api-keys) | `cohere` | trial key, 20 RPM/1,000 calls-month, **non-commercial only** |
+| OVHcloud AI Endpoints | *none — no signup, no key* | `--no-key` | 2 RPM per IP — last-resort bucket, EU-hosted |
+| Hugging Face | [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) | `huggingface` | see caveat below — currently **not** a real free bucket |
+| Cloudflare Workers AI | [dash.cloudflare.com](https://dash.cloudflare.com/) → Workers AI → *Use REST API* | `--account-id` | 10,000 Neurons/day, account-wide — needs your account ID too |
 | A 2nd account anywhere | — | — | separate cap — worth as much as a new provider |
 
-Two more work but need extra wiring rather than a plain base URL + key, so they're
-covered in [`GUIDE.md`](GUIDE.md#step-2--collect-independent-buckets) instead of here:
-**Hugging Face** (its catalog mixes free and metered models inside one entry) and
-**Cloudflare Workers AI** (its base URL has your account ID baked in).
+`--provider` values plug straight into `discover_free_models.py --provider <name>`. The
+last two need one extra flag each — commands and full detail in
+[`GUIDE.md`](GUIDE.md#step-2--collect-independent-buckets):
+
+```bash
+python scripts/discover_free_models.py --provider huggingface --key-env HF_TOKEN
+python scripts/discover_free_models.py \
+    --base-url https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1 \
+    --key-env CLOUDFLARE_API_TOKEN --account-id $CLOUDFLARE_ACCOUNT_ID
+```
+
+**Hugging Face gotcha:** its catalog marks free-vs-paid *per backing provider*, not per
+model id, so the script only keeps backends flagged `is_free`. As of this writing that
+flag is `false` on every backend in the catalog — HF's real free tier is a one-time
+**$0.10/month credit**, not standing capacity. The script still runs safely (it finds
+zero candidates and exits rather than burning your credit), it's just not a bucket to
+plan around right now.
 
 ---
 
