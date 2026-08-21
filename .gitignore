@@ -1,0 +1,30 @@
+# ---------------------------------------------------------------------------
+# Secrets. Nothing in this list should ever reach a commit.
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+.newkeys
+keys.txt
+auth.json
+credentials.json
+
+# Hermes local state
+.hermes/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
