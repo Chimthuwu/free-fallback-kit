@@ -850,9 +850,13 @@ them something close to this, verbatim, and wait for their reply:
 > | Groq | https://console.groq.com/keys | "Create API Key" | `GROQ_API_KEY` |
 > | Cerebras | https://cloud.cerebras.ai/ | sign up → **API Keys** (left nav) → "Generate API Key" | `CEREBRAS_API_KEY` |
 > | NVIDIA NIM | https://build.nvidia.com/ | sign in → profile → **Settings → API Keys** → "Generate Key" | `NVIDIA_API_KEY` |
+> | Mistral AI | https://console.mistral.ai/api-keys | sign up → "Create new key" | `MISTRAL_API_KEY` |
+> | Cohere | https://dashboard.cohere.com/api-keys | sign up → "Generate Trial Key" (non-commercial only) | `COHERE_API_KEY` |
 > | A 2nd OpenRouter account | https://openrouter.ai/settings/keys | "Create Key" — use a different login than your first account | `OPENROUTER_API_KEY_2` |
 >
-> Which ones do you want? Two or three is a real chain — you don't need all five.
+> Which ones do you want? Two or three is a real chain — you don't need all seven.
+> (Bonus, no signup at all: OVHcloud AI Endpoints, `https://oai.endpoints.kepler.ai.cloud.ovh.net/v1`
+> — no key, but capped at 2 requests/min per IP, so treat it as a last-resort entry.)
 
 **⚡ Hermes path — one more source, with no key to paste:** Hermes also has a native Nous
 Portal integration on its free plan, no card needed. This one's interactive OAuth, so the
@@ -872,6 +876,8 @@ Once done, `provider: nous` in `config.yaml` just works.
 | Groq | `provider: custom`, `base_url: https://api.groq.com/openai/v1` |
 | Cerebras | `provider: custom`, `base_url: https://api.cerebras.ai/v1` |
 | NVIDIA NIM | native `provider: nvidia` |
+| Mistral AI | `provider: custom`, `base_url: https://api.mistral.ai/v1` |
+| Cohere | `provider: custom`, `base_url: https://api.cohere.ai/compatibility/v1` — this is Cohere's OpenAI-compatibility layer, not its native `v2/chat` shape |
 | 2nd OpenRouter account | same `provider: openrouter` — register as a credential pool (Step 05a), not a second `fallback_providers` entry |
 
 Once everything's pasted into the file in Step 05, verify each key before it enters the

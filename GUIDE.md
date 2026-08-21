@@ -70,6 +70,23 @@ main path depends on.
 
 ---
 
+## Fast path: the `openrouter/free` router
+
+OpenRouter now ships a router model, `openrouter/free`, that picks a live `:free` model
+for you per request — 200K context, filters by whatever the request needs (vision,
+tool-calling, structured outputs). Point at it and skip Step 1 entirely for a first cut:
+
+```python
+{"model": "openrouter/free", "messages": [...]}
+```
+
+It does **not** replace the rest of this guide. It is still one model id on your
+OpenRouter account, so it shares the same account-wide daily cap as every other `:free`
+model — great as entry #0 in a chain, useless as the whole chain. Everything below is
+still how you get a second bucket.
+
+---
+
 ## Step 1 — Find out what actually works
 
 Do not trust model catalogs. Providers list models whose endpoints refuse to serve, and
@@ -120,9 +137,26 @@ wire format, so adding one is a base URL and a key.
 | Groq | https://console.groq.com/keys | `https://api.groq.com/openai/v1` |
 | Cerebras | https://cloud.cerebras.ai/ | `https://api.cerebras.ai/v1` |
 | NVIDIA NIM | https://build.nvidia.com/ | `https://integrate.api.nvidia.com/v1` |
+| Mistral AI | https://console.mistral.ai/api-keys | `https://api.mistral.ai/v1` |
+| Cohere (compat layer) | https://dashboard.cohere.com/api-keys | `https://api.cohere.ai/compatibility/v1` |
+| OVHcloud AI Endpoints | no signup, no key | `https://oai.endpoints.kepler.ai.cloud.ovh.net/v1` |
 
 A second account at a provider you already use is worth as much as a new provider, and
 is usually faster to set up.
+
+Two gotchas specific to the new rows: **Cohere's trial key is non-commercial use
+only** — 20 requests/min, 1,000 calls/month, fine for hobby work, not for anything
+that bills a customer. **OVHcloud needs no key at all**, but caps at 2 requests/min per
+IP — treat it as a last-resort bucket that survives a total outage, not a daily driver.
+
+Two more are usable but don't fit the `--provider` shortcut, so wire them with
+`--base-url` instead: **Hugging Face** (`https://router.huggingface.co/v1`) mixes free
+and metered models *inside one catalog entry* — its `/models` response nests pricing
+per backing provider rather than marking the model id itself, so check each entry's
+`is_free` field before trusting it, don't assume every id in the list is free.
+**Cloudflare Workers AI** is OpenAI-compatible too, but its base URL has your account ID
+baked in (`.../accounts/<ACCOUNT_ID>/ai/v1`), so it can't be a fixed constant the way the
+others are.
 
 ---
 
@@ -228,7 +262,24 @@ python scripts/discover_free_models.py --json > models.json
 ```
 
 Every entry your app loads should have answered a real request at least once. Free tiers
-move constantly — re-run every few weeks and prune what died.
+move constantly — re-run every few weeks and prune what died. This isn't hypothetical:
+GitHub Models — playground, catalog, and inference API alike — was fully retired on
+2026-07-30 with no successor free tier. Any chain still pointing at it fails every
+request, silently, until someone re-runs discovery and notices the entry is gone.
+
+The same caution applies to *lists* of free providers, this one included — a repo
+recommended elsewhere as "the clearest rate-limit reference" had been deleted entirely
+by the time this was checked. Two that were still live and actively maintained as of
+2026-08:
+
+- [mnfst/awesome-free-llm-apis](https://github.com/mnfst/awesome-free-llm-apis) — rate
+  limits and base URLs per provider, updated frequently.
+- [open-free-llm-api/awesome-freellm-apis](https://github.com/open-free-llm-api/awesome-freellm-apis)
+  — similar coverage, useful as a second opinion when the two disagree.
+
+Treat both as leads, not ground truth — confirm anything you plan to depend on with
+`discover_free_models.py --base-url <url> --key-env <VAR>` before it enters a chain, the
+same way you would a provider found anywhere else.
 
 ---
 

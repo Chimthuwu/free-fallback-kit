@@ -1,5 +1,9 @@
 # Free Fallback Kit
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Dependencies: none](https://img.shields.io/badge/dependencies-stdlib%20only-brightgreen.svg)](scripts/discover_free_models.py)
+[![Providers](https://img.shields.io/badge/providers-7%2B-orange.svg)](GUIDE.md#step-2--collect-independent-buckets)
+
 **Keep an LLM app running on free tiers without dying at the first quota wall.**
 
 A fallback chain of five free models sounds resilient. It usually isn't — on OpenRouter
@@ -17,6 +21,20 @@ because free tiers change weekly.
 
 ---
 
+## Contents
+
+- [Pick your entry point](#pick-your-entry-point)
+- [Quick start](#quick-start)
+- [What's in here](#whats-in-here)
+- [The core idea in one table](#the-core-idea-in-one-table)
+- [The shape you're aiming for](#the-shape-youre-aiming-for)
+- [Free buckets worth collecting](#free-buckets-worth-collecting)
+- [Known limits](#known-limits)
+- [Further reading](#further-reading)
+- [Contributing](#contributing)
+
+---
+
 ## Pick your entry point
 
 | You are | Start here |
@@ -25,13 +43,14 @@ because free tiers change weekly.
 | Doing it yourself | **[`GUIDE.md`](GUIDE.md)** — the same material explained, with the reasoning |
 | Writing the fallback logic into your own code | **[`examples/python/fallback_chain.py`](examples/python/fallback_chain.py)** — a dependency-light reference implementation |
 | Configuring Hermes Agent or OpenClaw | **[`SETUP.agent.md`](SETUP.agent.md)** — tool-specific branches (marked ⚡) live in the same file, no separate download needed |
+| In a hurry, just want *something* free right now | Point at `openrouter/free` — see [below](#fast-path) — then come back and read the rest |
 
 ---
 
 ## Quick start
 
 ```bash
-git clone https://github.com/<you>/free-fallback-kit
+git clone https://github.com/Chimthuwu/free-fallback-kit
 cd free-fallback-kit
 
 # 1. Find which free models actually answer on your key
@@ -39,7 +58,7 @@ export OPENROUTER_API_KEY=sk-or-v1-...
 python scripts/discover_free_models.py
 
 # 2. Same script, any OpenAI-compatible provider
-python scripts/discover_free_models.py --provider groq
+python scripts/discover_free_models.py --provider mistral
 python scripts/discover_free_models.py --base-url https://api.cerebras.ai/v1 --key-env CEREBRAS_API_KEY
 
 # 3. Emit a chain your code can load
@@ -49,6 +68,15 @@ python scripts/discover_free_models.py --json > models.json
 Or hand the folder to a coding agent:
 
 > Follow `SETUP.agent.md` in this repo and wire free-tier fallback into <my project>.
+
+<a id="fast-path"></a>
+**Fast path, zero setup:** OpenRouter ships a router model, `openrouter/free`, that
+auto-picks a live `:free` model per request (200K context, filters by whatever the
+request needs — vision, tools, structured output). Point at it as `model:
+"openrouter/free"` and you're answering requests immediately. It's still one model on
+one account, though — same daily cap as everything else on OpenRouter, so it's a good
+entry #0, not a substitute for a second bucket. Details in
+[`GUIDE.md`](GUIDE.md#fast-path-the-openrouterfree-router).
 
 ---
 
@@ -95,26 +123,32 @@ CHAIN    only once a provider's keys are all spent
   0 … k         same provider, descending quality    cheap hops
   k+1           independent bucket A                 survives the daily cap
   k+2           independent bucket B                 survives A
-  last          models you tolerate but don't love   never fires in normal use
+  last          models you tolerate but don't love    never fires in normal use
 ```
 
 ---
 
 ## Free buckets worth collecting
 
-All free, none need a card.
+All free, none need a card unless noted. Every OpenAI-compatible one works with a base
+URL and a key — no new SDK.
 
-| Provider | Signup | Endpoint |
-|---|---|---|
-| OpenRouter | https://openrouter.ai/settings/keys | `https://openrouter.ai/api/v1` |
-| Google AI Studio | https://aistudio.google.com/apikey | `https://generativelanguage.googleapis.com/v1beta/openai/` |
-| Groq | https://console.groq.com/keys | `https://api.groq.com/openai/v1` |
-| Cerebras | https://cloud.cerebras.ai/ | `https://api.cerebras.ai/v1` |
-| NVIDIA NIM | https://build.nvidia.com/ | `https://integrate.api.nvidia.com/v1` |
-| A 2nd account anywhere | — | separate cap — worth as much as a new provider |
+| Provider | Signup | Endpoint | Notes |
+|---|---|---|---|
+| OpenRouter | https://openrouter.ai/settings/keys | `https://openrouter.ai/api/v1` | account-wide daily cap across every `:free` model |
+| Google AI Studio | https://aistudio.google.com/apikey | `https://generativelanguage.googleapis.com/v1beta/openai/` | meters per model per day — two models, two allowances |
+| Groq | https://console.groq.com/keys | `https://api.groq.com/openai/v1` | fast, generous, independent of the rest |
+| Cerebras | https://cloud.cerebras.ai/ | `https://api.cerebras.ai/v1` | verify — a valid key can still 402 with no active free allowance |
+| NVIDIA NIM | https://build.nvidia.com/ | `https://integrate.api.nvidia.com/v1` | | 
+| Mistral AI | https://console.mistral.ai/api-keys | `https://api.mistral.ai/v1` | ~1 req/s, 500K TPM, ~1B tokens/month |
+| Cohere (compat layer) | https://dashboard.cohere.com/api-keys | `https://api.cohere.ai/compatibility/v1` | trial key, 20 RPM/1,000 calls-month, **non-commercial only** |
+| OVHcloud AI Endpoints | *none — no signup, no key* | `https://oai.endpoints.kepler.ai.cloud.ovh.net/v1` | 2 RPM per IP — last-resort bucket, EU-hosted |
+| A 2nd account anywhere | — | — | separate cap — worth as much as a new provider |
 
-Every one of them speaks the OpenAI chat-completions wire format, so one client class
-covers the lot.
+Two more work but need extra wiring rather than a plain base URL + key, so they're
+covered in [`GUIDE.md`](GUIDE.md#step-2--collect-independent-buckets) instead of here:
+**Hugging Face** (its catalog mixes free and metered models inside one entry) and
+**Cloudflare Workers AI** (its base URL has your account ID baked in).
 
 ---
 
@@ -128,9 +162,28 @@ ahead of a limit, and it needs 2+ keys on *different accounts* to be worth anyth
 re-reads the full history at full input cost — as does the return to the primary.
 Irrelevant on free models; expensive the moment a paid model enters the chain.
 
-**Free tiers rot.** Models get delisted, quotas change, endpoints break without notice.
-Re-run `discover_free_models.py` every few weeks and prune what died. A chain entry that
-no longer exists burns a failover hop on every single request.
+**Free tiers rot.** Models get delisted, quotas change, endpoints break without notice —
+or the whole product does: GitHub Models, playground and inference API alike, was fully
+retired on 2026-07-30 with no successor free tier. Re-run `discover_free_models.py`
+every few weeks and prune what died. A chain entry that no longer exists burns a
+failover hop on every single request.
+
+---
+
+## Further reading
+
+For a wider provider list than this kit tracks directly:
+
+- [mnfst/awesome-free-llm-apis](https://github.com/mnfst/awesome-free-llm-apis) —
+  rate limits and base URLs per provider, updated frequently.
+- [open-free-llm-api/awesome-freellm-apis](https://github.com/open-free-llm-api/awesome-freellm-apis) —
+  similar coverage, a useful second opinion when the two disagree.
+
+Treat both as leads, not ground truth, for the same reason this whole kit exists —
+verify with `discover_free_models.py` before anything in either list enters a chain you
+depend on. (One list recommended elsewhere as *the* clearest reference had been deleted
+outright by the time this was checked. That's not a knock on either repo above — it's
+the entire argument for probing live instead of trusting a snapshot.)
 
 ---
 

@@ -9,9 +9,11 @@ Usage:
     export OPENROUTER_API_KEY=sk-or-v1-...
     python discover_free_models.py                      # OpenRouter :free models
     python discover_free_models.py --require-tools      # agents: tool-calling only
-    python discover_free_models.py --provider groq      # a known provider
+    python discover_free_models.py --provider mistral   # a known provider
     python discover_free_models.py --base-url https://api.cerebras.ai/v1 \
                                    --key-env CEREBRAS_API_KEY
+    python discover_free_models.py --base-url https://oai.endpoints.kepler.ai.cloud.ovh.net/v1 \
+                                   --no-key              # OVHcloud: no signup, no key
     python discover_free_models.py --rank latency       # interactive workloads
     python discover_free_models.py --json > models.json # machine-readable chain
     python discover_free_models.py --prompt "Translate to Swedish: good evening"
@@ -37,6 +39,10 @@ PROVIDERS = {
     "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai/", "GOOGLE_API_KEY"),
     "cerebras": ("https://api.cerebras.ai/v1", "CEREBRAS_API_KEY"),
     "nvidia": ("https://integrate.api.nvidia.com/v1", "NVIDIA_API_KEY"),
+    "mistral": ("https://api.mistral.ai/v1", "MISTRAL_API_KEY"),
+    # Cohere's own v2/chat shape is not OpenAI-compatible -- this is their
+    # separate compatibility layer, which speaks the same dialect as the rest.
+    "cohere": ("https://api.cohere.ai/compatibility/v1", "COHERE_API_KEY"),
 }
 
 # Some provider edges (Cloudflare) reject default Python user-agents with a
@@ -176,6 +182,8 @@ def main():
     ap.add_argument("--base-url", help="any OpenAI-compatible endpoint; overrides --provider")
     ap.add_argument("--key-env", help="env var holding the key for --base-url")
     ap.add_argument("--key", help="key value (default: read the provider's env var)")
+    ap.add_argument("--no-key", action="store_true",
+                    help="provider needs no key at all (e.g. OVHcloud AI Endpoints)")
     ap.add_argument("--all", action="store_true",
                     help="probe paid models too, not just :free ones")
     ap.add_argument("--require-tools", action="store_true",
@@ -192,16 +200,18 @@ def main():
 
     if args.base_url:
         base_url = args.base_url
-        key_env = args.key_env or "OPENROUTER_API_KEY"
+        key_env = args.key_env or ("" if args.no_key else "OPENROUTER_API_KEY")
         # Name the bucket after its key variable: CEREBRAS_API_KEY -> cerebras.
-        provider = re.sub(r"_api_key.*$", "", key_env, flags=re.I).lower() or "custom"
+        provider = (re.sub(r"_api_key.*$", "", key_env, flags=re.I).lower()
+                    if key_env else "custom")
     else:
         base_url, key_env = PROVIDERS[args.provider]
         provider = args.provider
 
     key = args.key or os.environ.get(key_env)
-    if not key:
-        print(f"error: no key. Set {key_env} or pass --key", file=sys.stderr)
+    if not key and not args.no_key:
+        print(f"error: no key. Set {key_env}, pass --key, or pass --no-key "
+              "if this provider genuinely needs none", file=sys.stderr)
         return 1
 
     out = sys.stderr if args.json else sys.stdout
@@ -240,7 +250,7 @@ def main():
         ok, elapsed, detail = probe(base_url, key, mid, args.prompt, args.timeout)
         if ok:
             usable.append({"provider": provider, "model": mid, "base_url": base_url,
-                           "key_env": key_env, "context": ctx,
+                           "key_env": key_env or None, "context": ctx,
                            "latency_s": round(elapsed, 2), "score": round(score, 1)})
             print(f"  LIVE      {mid:<52} {elapsed:5.1f}s  ctx={ctx:<9} {detail}", file=out)
         else:

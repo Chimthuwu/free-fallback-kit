@@ -49,6 +49,8 @@ PROVIDER_BASES = {
     "gemini": "https://generativelanguage.googleapis.com/v1beta/openai/",
     "cerebras": "https://api.cerebras.ai/v1",
     "nvidia": "https://integrate.api.nvidia.com/v1",
+    "mistral": "https://api.mistral.ai/v1",
+    "cohere": "https://api.cohere.ai/compatibility/v1",  # Cohere's own v2/chat is not this dialect
 }
 
 # First variable listed is the primary key; the rest form the rotation pool.
@@ -58,6 +60,8 @@ PROVIDER_KEY_ENVS = {
     "gemini": ["GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY_2"],
     "cerebras": ["CEREBRAS_API_KEY"],
     "nvidia": ["NVIDIA_API_KEY"],
+    "mistral": ["MISTRAL_API_KEY"],
+    "cohere": ["COHERE_API_KEY"],
 }
 
 # Last-resort ids, used only when a provider's own model listing is unreachable.
