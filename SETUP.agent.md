@@ -75,6 +75,19 @@ The project ends up with:
 - **Never add a model that lacks a capability the app depends on** — tool calling for an
   agent, vision for image input, a large context for long documents. It fails on first
   use, every time.
+- **A permission error is not a dead end — it's a signal to re-run elevated, not an
+  excuse to stop.** If a command fails with `EACCES`, `EPERM`, "Access is denied",
+  "Permission denied", or an installer/service call silently no-ops because it needed an
+  admin token you don't have, do not conclude the step is impossible and do not narrate
+  your own limitations ("I can't run the gateway myself", "I don't have permission to
+  install that") — that reads as a shrug to a human for whom the actual fix is fifteen
+  seconds of clicking. State plainly what failed and why (a privilege wall, not a broken
+  command), then walk them through opening an elevated terminal using the box in
+  **WHEN A COMMAND FAILS ON PERMISSIONS** below, wait for their confirmation, and re-run
+  the exact same command yourself in that new terminal. Never dodge this by quietly
+  weakening security instead — no bundling `sudo` into a script, no disabling a
+  permission check, no switching to a workaround that installs somewhere unmanaged just
+  to avoid asking.
 - **Do not invent model IDs.** Use exactly what Step 02 returns.
 - **Do not restrict data collection on OpenRouter** (`data_collection: "deny"` or the
   equivalent privacy setting). It removes nearly every free endpoint from routing.
@@ -236,6 +249,51 @@ concept, never one per line:
 
 The boxed prompts through the rest of this file show the shape to reproduce — the exact
 wording is yours to adapt to the conversation.
+
+✦ ───────── ◇ ───────── ✦
+
+## ◇ WHEN A COMMAND FAILS ON PERMISSIONS
+
+Comes up most at Step 01 (installer writing to a protected path or touching
+`HKCU:\Environment`) and Step 06a (`pip install` into a venv under a locked-down
+directory, or the gateway needing a port/service permission the current shell doesn't
+have). Recognize it by the error, not by guessing: `EACCES`, `EPERM`, "Access is
+denied", "Permission denied", a Windows installer that exits 0 but visibly changed
+nothing, or a `[Environment]::SetEnvironmentVariable(...,'Machine')` call that errors out
+(that one specifically needs admin — see Step 01).
+
+Don't stop there and don't editorialize about it. Send this, swapped for the OS actually
+in play, then wait for confirmation before retrying the exact command that failed:
+
+```
+◇ THAT NEEDS A HIGHER-PERMISSION TERMINAL
+
+<the command> failed because this terminal doesn't have permission to
+<install into that folder / write that setting / whatever it actually needed> —
+not because the command itself is wrong. Fifteen seconds fixes it:
+
+  WINDOWS
+  1. Press the Windows key, type: powershell
+  2. Right-click "Windows PowerShell" (or "Terminal") in the results
+  3. Click "Run as administrator"
+  4. Click "Yes" on the prompt that pops up
+  A window titled "Administrator: Windows PowerShell" means it worked.
+
+  macOS / LINUX
+  No relaunch needed — just prefix the one command with sudo and enter
+  your account password when asked:
+      sudo <the exact command that failed>
+
+Once that's open (or you've run the sudo version), tell me and I'll re-run it.
+
+⟡ WAITING ⟡
+```
+
+Re-run the identical command yourself once they confirm — don't ask them to type it,
+that defeats the point of you driving this. If it fails again with the same class of
+error even after elevation, that's a real problem (wrong drive permissions, a corporate
+policy block, antivirus quarantine) — say so plainly and troubleshoot the actual cause
+instead of repeating the same box a second time.
 
 ✦ ───────── ◇ ───────── ✦
 
@@ -517,8 +575,12 @@ unset HERMES_HOME   # current shell
 
 ```powershell
 [Environment]::SetEnvironmentVariable('HERMES_HOME', $null, 'User')
-[Environment]::SetEnvironmentVariable('HERMES_HOME', $null, 'Machine')  # needs admin; skip if it errors
+[Environment]::SetEnvironmentVariable('HERMES_HOME', $null, 'Machine')  # needs admin
 ```
+
+If the `Machine`-scope line errors with something permission-shaped, that is expected in
+a non-admin terminal — don't just skip it silently. Use the box in **WHEN A COMMAND FAILS
+ON PERMISSIONS** above to get an elevated one, then re-run that one line.
 
   Only delete the old directory if the human confirms it's not holding anything they
   want — it's a destructive step, not an automatic one.
@@ -561,6 +623,10 @@ source ~/.bashrc   # or ~/.zshrc — reload PATH before the next command
 # Windows, native PowerShell — bundles Python 3.11, Node.js, uv, ripgrep, ffmpeg, Git Bash
 iex (irm https://hermes-agent.nousresearch.com/install.ps1)
 ```
+
+If either installer fails partway with a permission-shaped error (can't write to
+`Program Files`, can't register on PATH machine-wide, etc.), that's the **WHEN A COMMAND
+FAILS ON PERMISSIONS** box above, not a reason to conclude Hermes can't be installed here.
 
 **B or C — from-source.** Clone into `<INSTALL_LOCATION>` and build the venv there
 (`cd <INSTALL_LOCATION>` first if it's not the current directory):
@@ -637,6 +703,12 @@ npm install -g openclaw@latest --allow-scripts=openclaw
 git clone https://github.com/openclaw/openclaw.git <INSTALL_LOCATION>
 cd <INSTALL_LOCATION> && corepack enable && pnpm install
 ```
+
+A global `npm install -g` or the daemon step below is the most likely place this hits a
+permission wall (`EACCES` on the global npm prefix, or the daemon needing to register
+itself). That's **WHEN A COMMAND FAILS ON PERMISSIONS** near the top of this file, not a
+reason to fall back to a degraded install — get the human into an elevated terminal and
+re-run the same line.
 
 Then onboard and verify:
 
@@ -1345,6 +1417,11 @@ system one:
 ```bash
 "$(dirname "<HERMES>")/python" -m pip install discord.py aiodns
 ```
+
+If that install fails on a permission error rather than a missing-package or network
+error, this is exactly the case in **WHEN A COMMAND FAILS ON PERMISSIONS** near the top
+of this file — walk the human through an elevated terminal and re-run the same `pip
+install` line yourself, rather than reporting that the gateway can't be installed.
 
 **2. Run the setup wizard — don't hand-write the `discord:` section yourself.** It reads
 `DISCORD_BOT_TOKEN` out of `<HERMES_HOME>/.env` on its own and writes the matching
