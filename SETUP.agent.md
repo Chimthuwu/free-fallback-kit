@@ -96,6 +96,33 @@ The project ends up with:
 - **(⚡ Hermes path) `key_env` is valid in `fallback_providers` only.** Entries under
   `auxiliary.<task>.fallback_chain` accept only `provider`, `model`, `base_url`,
   `api_key`, `timeout` — no env-var indirection there.
+- **(⚡ Hermes path) Every `key_env` named in `config.yaml` must actually exist in
+  `<HERMES_HOME>/.env`.** A `key_env` pointing at a variable that was never written is a
+  dead entry that fails (or gets silently skipped, see REFERENCE) on every request and
+  reads as "the whole chain is broken". Grep the variable **name** only — never the
+  value: `grep -c '^OPENROUTER_API_KEY2=' <HERMES_HOME>/.env`. Same for duplicates: if
+  `.env` defines a variable twice, the second line silently wins and the first key is
+  wasted — check with `awk -F= '/^[A-Z0-9_]+=/{c[$1]++} END{for (k in c) if (c[k]>1) print k}' <HERMES_HOME>/.env`.
+  **Variable names contain digits** (`OPENROUTER_API_KEY2`, `GEMINI_API_KEY2`) — any
+  grep/awk that matches names must use `[A-Z0-9_]+`, never `[A-Z_]+`, or it will miss
+  the `_2`/`_3` keys that pin a second bucket and you'll wrongly report them missing.
+- **(⚡ Hermes path) Resolve the real env file before editing anything.** Hermes reads
+  `<HERMES_HOME>/.env` — and `<HERMES_HOME>` can be a *subfolder* of the working copy
+  (e.g. `z:/Github/Hermes/.hermes/`) while a near-identical `.env` sits at the repo
+  root and is ignored at runtime. Editing the copy changes nothing, makes you "fix"
+  non-existent problems, and makes real keys look missing. Resolve with
+  `hermes config path` (the real env file is the sibling `.env` of the printed config),
+  then confirm what Hermes actually sees with `hermes status` (it lists which provider
+  keys are set). Run every static check and key write against THAT file.
+- **Verify the exact model on the exact key — never just the key.** Keys authenticate;
+  they say nothing about which models the project can serve. Confirmed live 2026-08-23:
+  `gemini-2.5-flash`/`-lite` return `404 "This model ... is no longer available to new
+  users"` on newer Google projects while `gemini-3.6-flash` answers on the same keys;
+  GitHub Copilot serves `gpt-4o` but 403s `gpt-4o-mini` on the free plan; NVIDIA NIM
+  has a valid catalog entry (`deepseek-ai/deepseek-v4-flash-0731`) that times out past
+  180s while `nemotron-3.5-lightning-30b-a3b` answers on the same key. A 404/403/
+  timeout on a model is a reason to pin a different model on the same key — not to
+  delete the bucket.
 - Re-running this runbook must be safe. Check before appending to any `.env`.
 
 ```
@@ -930,6 +957,14 @@ them something close to this, verbatim, and wait for their reply:
 > (Bonus, no signup at all: OVHcloud AI Endpoints, `https://oai.endpoints.kepler.ai.cloud.ovh.net/v1`
 > — no key, but capped at 2 requests/min per IP, so treat it as a last-resort entry.)
 
+**Minimum viable = OpenRouter + Groq.** That's the smallest combo that actually "just
+works": both no-card signups, both OpenAI-compatible, each holding a separate daily
+cap. The Google/Gemini key is a genuinely useful third bucket, but its free tier is
+sized for chat, not agents — it runs dry mid-session, so **never make it the foundation
+the chain leans on**. The shape to aim for: a self-updating OpenRouter router, Groq as
+the real second bucket, Gemini as a bonus tail that's allowed to die. Ask for the Gemini
+key only as an optional extra, not a prerequisite.
+
 **⚡ Hermes path — one more source, with no key to paste:** Hermes also has a native Nous
 Portal integration on its free plan, no card needed. This one's interactive OAuth, so the
 **user** has to run it themselves — you can't drive it on their behalf:
@@ -1152,6 +1187,15 @@ Named providers read fixed variable names (`gemini` → `GOOGLE_API_KEY` only); 
 key for the same provider goes through a credential pool (Step 05a), not a second
 variable name. Custom endpoints read whatever `key_env` names in `config.yaml`.
 
+**⚡ Hermes path — make sure you're editing the file Hermes actually reads.** A setup
+can hold two `.env` files that look identical: `<HERMES_HOME>/.env` (real) and a decoy
+at the project root. Confirmed live 2026-08-23: keys lived in
+`z:/Github/Hermes/.hermes/.env` (25KB) while `z:/Github/Hermes/.env` was a stale copy
+Hermes ignored — and an entire session was spent "fixing" the copy. Before touching
+anything: run `hermes config path`, take the `.env` next to that config, and
+sanity-check with `hermes status` (it prints which keys are seen). Then grep the
+**real** file.
+
 **1. Pre-fill the blanks yourself, with a placeholder hint on each line, not a bare
 `=`.** A blank line reads as "already handled" at a glance; a placeholder tells the human
 exactly what belongs there without them needing to remember Step 04's table:
@@ -1304,33 +1348,74 @@ dependency-light and deliberately small. Whatever the language, it must do all o
 Pin secondary work — summarisation, titles, classification — to the smallest usable
 model so it never competes with the main path for quota.
 
-**⚡ Hermes path:** write `<HERMES_HOME>/config.yaml` instead — no application code. Fill
+**⚡ Hermes path:** write `<HERMES_HOME>/config.yaml` instead — no application code. The
+primary is `openrouter/free` — OpenRouter's router that self-selects a live `:free`
+model per request, so it can't go stale the way a hand-picked ID can. Fill the remaining
 placeholders with **verified** models from Steps 02 and 04.
 
 ```yaml
 model:
   provider: "openrouter"
   base_url: "https://openrouter.ai/api/v1"
-  default: "<BEST_VERIFIED_FREE_MODEL>"
+  default: "openrouter/free"    # router that self-selects a live :free model — never goes stale
 
 fallback_providers:
-  # Cheap hops first: same provider, descending model quality.
+  # OpenRouter bucket — every :free model shares ONE account-wide daily cap (~50 req/day).
+  # Two entries max: enough to survive a flaky model, no quota gained beyond that.
   - provider: openrouter
-    model: <SECOND_BEST>
+    model: <SECOND_VERIFIED_FREE_MODEL>
   - provider: openrouter
-    model: <THIRD_BEST>
-  # ... remaining verified OpenRouter models
+    model: <THIRD_VERIFIED_FREE_MODEL>
 
-  # Then independent buckets. These survive the account-wide daily cap.
+  # Groq bucket — independent of OpenRouter; this is where the real headroom lives.
+  # Verify live model IDs first (Step 02): the catalog changes, e.g. 2026-08-23 had
+  # llama-3.3-70b-versatile gone and openai/gpt-oss-120b + qwen/qwen3.6-27b answering.
   - provider: custom
-    model: <GROQ_MODEL>
+    model: <GROQ_MODEL_1>
+    base_url: https://api.groq.com/openai/v1
+    key_env: GROQ_API_KEY
+  - provider: custom
+    model: <GROQ_MODEL_2>
     base_url: https://api.groq.com/openai/v1
     key_env: GROQ_API_KEY
 
+  # Z.ai — GLM-4.5-Flash is free on the API, verified live 2026-08-23.
+  # OpenAI-compatible; catalog at https://api.z.ai/api/paas/v4/models.
+  - provider: custom
+    model: glm-4.5-flash
+    base_url: https://api.z.ai/api/paas/v4
+    key_env: ZAI_API_KEY
+
+  # NVIDIA NIM — native provider: nvidia, reads NVIDIA_API_KEY; ~40 RPM / 1000 RPD
+  # per key, so several keys = several buckets (custom entries + NVIDIA_API_KEY2/3/4).
+  # Pin models you actually called — 2026-08-23: nemotron-3.5-lightning-30b-a3b and
+  # stepfun-ai/step-3.7-flash answered; deepseek-ai/deepseek-v4-flash-0731 timed out.
+  - provider: nvidia
+    model: <NVIDIA_MODEL>
+
+  # GitHub Copilot — native provider: copilot, uses the gh CLI token. Verified live
+  # 2026-08-23: gpt-4o answers, gpt-4o-mini 403s on the free plan. Small monthly chat
+  # quota — an emergency bucket, not a pillar.
+  - provider: copilot
+    model: gpt-4o
+
+  # Gemini bucket — optional, and LAST. Its free tier dies mid-session on agent work
+  # (3-10 calls per turn, resending full context), so it 429s long before the day is
+  # over. That is normal — but only if the chain above can run the whole session
+  # without it. Never make Gemini the pillar. Note: on newer Google projects
+  # gemini-2.5-flash returns 404 — pin gemini-3.6-flash (verified 2026-08-23).
   - provider: gemini
-    model: <GEMINI_MODEL_A>
-  - provider: gemini
-    model: <GEMINI_MODEL_B>     # separate per-model quota on the same key
+    model: gemini-3.6-flash
+
+  # Optional extra bucket (interactive OAuth, no card):
+  # - provider: nous
+  #   model: <NOUS_MODEL>
+
+  # ⚡ Supplement mode only (see below) — the user's own paid BYOK key, dead last.
+  # - provider: custom
+  #   model: <USER_PAID_MODEL>
+  #   base_url: <USER_PAID_BASE_URL>
+  #   key_env: USER_PAID_API_KEY
 
 credential_pool_strategies:
   openrouter: least_used
@@ -1373,17 +1458,68 @@ agent:
   api_max_retries: 1
 ```
 
+**⚡ Supplement mode — free chain first, the user's own paid key as the last resort.**
+Some users already pay for a model (their own OpenAI/Anthropic/OpenRouter credits, etc.)
+and want the free chain above to absorb ordinary traffic so it never touches that paid
+balance — while still guaranteeing an answer when every free bucket is dead. Do this by
+uncommenting the BYOK entry at the very end of `fallback_providers`, after Gemini:
+
+```yaml
+  - provider: custom
+    model: <USER_PAID_MODEL>          # e.g. gpt-4o, claude-sonnet-5 — confirm, don't guess
+    base_url: <USER_PAID_BASE_URL>    # e.g. https://api.openai.com/v1
+    key_env: USER_PAID_API_KEY
+```
+
+Add the matching `USER_PAID_API_KEY=` line to `.env` the same way as every other key
+(Step 05) — never write the key into `config.yaml` itself. Confirm with the user which
+model their key actually serves before pinning it; don't infer it from the provider name
+(see the model-verification note above — a key being valid says nothing about which
+model answers on it). This entry's whole job is to sit idle: if it's taking real traffic,
+either a free bucket upstream is misconfigured or the chain is genuinely exhausted and
+that's worth flagging to the user, not quietly absorbing.
+
 **⚡ Ordering rules:**
 
 1. Cheap hops first — same provider, different model, ranked by quality/context.
-2. Then independent buckets, ranked by model quality.
-3. Models the user dislikes go last. They still catch a total outage without appearing
+2. **Cap same-account entries.** Every `:free` model on one OpenRouter account shares a
+   single daily cap — a ninth entry gains zero quota and only adds failure noise when
+   the cap empties. Primary + two `:free` fallbacks per account is the ceiling;
+   additional accounts go through a credential pool (Step 05a), not more chain entries.
+3. Then independent buckets, ranked by model quality. Each different provider/account
+   is a genuinely separate cap — that's what actually keeps a session alive.
+4. **Gemini goes last, and the chain must run a full session without it.** Its free tier
+   dies mid-session on agent work (see REFERENCE) — if Gemini is load-bearing, the chain
+   breaks mid-conversation and every turn after that starts with a scary 429.
+5. Models the user dislikes go last. They still catch a total outage without appearing
    in normal operation. **Ask the user about model preferences** — do not assume the
    biggest model is the one they want.
-4. Exclude anything that failed Step 02, and add a YAML comment saying why.
+6. **A user's own paid BYOK key, if present, goes dead last — after Gemini, after
+   everything free.** It exists to guarantee an answer once the whole free chain is
+   exhausted, not to share load with it. Putting it any earlier defeats the reason the
+   user wanted a free chain in front of it.
+6. Exclude anything that failed Step 02, and add a YAML comment saying why.
 
 `api_max_retries: 1` makes it fail over on the first error rather than burning three
 retries against an already-limited model.
+
+**⚡ Static checks — zero quota spent; run these before any live test.** A missing
+`key_env` or a duplicate `.env` name is the classic silent killer: the config looks
+fine, every entry fails (or is skipped, see REFERENCE), and the user reads it as "the
+whole chain is broken".
+
+```bash
+# every key_env named in config.yaml must exist in .env — names only, never values.
+# Use [A-Z0-9_]+ — variable names contain digits (OPENROUTER_API_KEY2, GEMINI_API_KEY2)
+grep -oE 'key_env: [A-Z0-9_]+' <HERMES_HOME>/config.yaml | awk '{print $2}' | sort -u | \
+  while read v; do grep -qc "^$v=" <HERMES_HOME>/.env && echo "ok       $v" \
+    || echo "MISSING  $v"; done
+
+# no duplicate variable names in .env (the second line silently wins)
+awk -F= '/^[A-Z0-9_]+=/{c[$1]++} END{for (k in c) if (c[k]>1) print "DUPLICATE  " k}' <HERMES_HOME>/.env
+
+# then eyeball fallback_providers: max two entries per OpenRouter account
+```
 
 ✦ ───────── ◇ ───────── ✦
 
@@ -1474,9 +1610,11 @@ chain containing a dead entry.
 
 Then exercise the app itself once, end to end, and confirm a real request succeeds.
 
-**⚡ Hermes path:** live-test every entry in the config you just wrote. If you have the
-repo, this ships as `verify_chain.py`, which also checks the auxiliary schema. The
-inline equivalent:
+**⚡ Hermes path:** run the static checks from Step 06 first — a missing `key_env`
+crashes the script below with a `KeyError`, or worse, reads as a silent skip at runtime;
+catch it for free before spending any quota. Then live-test every entry in the config
+you just wrote. If you have the repo, this ships as `verify_chain.py`, which also
+checks the auxiliary schema. The inline equivalent:
 
 ```python
 import yaml, json, urllib.request, os
@@ -1501,6 +1639,9 @@ for i, e in enumerate(entries):
             urllib.request.urlopen(urllib.request.Request(
                 url, body, {"Content-Type": "application/json"}), timeout=90)
         else:
+            if p != "openrouter" and e.get("key_env") not in env:
+                print(f"{i:>3} DEAD  {p:<12} {m:<34} key_env {e.get('key_env')} missing from .env")
+                continue
             key = env["OPENROUTER_API_KEY"] if p == "openrouter" else env[e["key_env"]]
             base = ("https://openrouter.ai/api/v1" if p == "openrouter"
                     else e["base_url"].rstrip("/"))
@@ -1526,8 +1667,26 @@ for task, v in (cfg.get("auxiliary") or {}).items():
         assert not extra, f"{task}: unsupported keys {extra}"
 ```
 
+**⚡ Verify the model on the key, not the key alone** — see INVARIANTS. A bucket can
+pass a models-list call with a valid key and still 404/403/timeout on the exact model
+you pin (Gemini 2.5-flash on newer projects; Copilot gpt-4o-mini on free plans; NVIDIA
+deepseek-v4-flash). When an entry prints `DEAD` with 404/403, first try a sibling model
+on the same key before removing the bucket. Prefer cheap metadata calls (models list,
+`GET /v1/key`) over chat calls while you still have several candidates — chat-test only
+the exact model you'll pin.
+
 ✓ Every entry must print `LIVE`. ✕ If any prints `DEAD`, remove it from the config and
 re-run. Do not hand back a config containing a dead entry.
+
+**⚡ Hermes path — fastest end-to-end check, one turn, no TUI:** run
+`hermes -z "Reply with exactly: ok"` — a non-interactive one-shot turn that succeeds on
+the primary and exits. Confirm what actually served it (and that the cost was $0.00)
+from recorded usage: `hermes sessions list` → note the new session id → query
+`state.db`: `SELECT model, billing_provider, api_call_count, estimated_cost_usd FROM
+session_model_usage WHERE session_id='<id>';`. Run `hermes status` first to confirm the
+primary loaded. This burns one turn instead of one request per chain entry — the
+correct way to confirm an assembled chain is alive without spending the quota it's
+protecting.
 
 If Discord is in play, this step verifies the model chain only — it does not confirm the
 bot itself is online. That's Step 06a; don't report success here as if it covered both.
@@ -1607,6 +1766,144 @@ Decoration doesn't replace the actual result — underneath it, state plainly:
 - **(⚡ Hermes path) Auxiliary tasks inherit the top-level chain** when their provider is
   `auto` and they declare no `fallback_chain`.
 - **Free tiers change constantly.** Re-run Step 02 every few weeks and prune what died.
+- **(⚡ Hermes path) `hermes model` — with or without `--refresh` — is not a harmless
+  cache refresh. It runs the full interactive setup wizard.** Confirmed live: a user ran
+  `hermes model --refresh` purely to force the picker's disk cache to re-fetch, and it
+  silently walked them into a **Nous Portal OAuth device-code login**, added a `nous`
+  credential to `auth.json`, and rewrote `model.provider`/`model.default` to
+  `nous`/`<picked model>` — a completely different, fourth quota bucket from whatever
+  Gemini/OpenRouter buckets Step 04 built. Nothing about `--refresh`'s own `--help` text
+  suggests it re-runs onboarding; it does. After *any* invocation of `hermes model`, treat
+  the primary as unknown and re-read `config.yaml`'s `model:` block before telling the
+  user anything is still configured the way you left it.
+- **(⚡ Hermes path) The wizard drops your old default on the floor instead of demoting
+  it.** `hermes model` only ever writes `model.provider`/`model.default` — it does not
+  push whatever was previously the primary into `fallback_providers`. Confirmed: a chain
+  with `gemini-2.5-flash` (primary) → `gemini-2.5-flash-lite` (fallback #1) had its
+  primary swapped to a Nous model via the wizard, and `gemini-2.5-flash` vanished from
+  the config entirely — not primary, not in the fallback list, silently losing one of two
+  independent per-model Gemini quotas. After a user runs `hermes model` for any reason,
+  diff the resulting `config.yaml` against what it was before and manually re-add the old
+  default to the top of `fallback_providers` if it isn't already represented somewhere in
+  the chain.
+- **(⚡ Hermes path) A Nous Portal login reconfigures more than the chat model.** The same
+  OAuth flow that sets `model.provider: nous` also silently added `web.backend: nous`,
+  `browser.cloud_provider: nous`, and `image_gen.provider: nous` to `config.yaml` — none
+  of which the user asked for, all of which now depend on that Nous session staying
+  valid. Flag this to the user rather than assuming only the model chain changed.
+- **(⚡ Hermes path) An already-running `hermes chat` session never picks up a
+  `config.yaml` edit — verified against the source, not just observed.** The gateway
+  (Discord/Slack/etc., `gateway/run.py`) was fixed for this under bug #60955
+  ("gateway must not freeze fallback_providers") and now calls
+  `self._refresh_fallback_model()` — a fresh disk read — before every turn. The
+  interactive CLI/TUI session was **not** part of that fix: `hermes_cli/cli_agent_setup_mixin.py`
+  and `hermes_cli/cli_commands_mixin.py` both construct the agent with
+  `fallback_model=self._fallback_model`, the frozen snapshot taken once at session start.
+  Confirmed live: a 2.5-hour, 159-message session kept retrying only the original
+  fallback list from before a mid-session edit — it never touched a newly-added
+  `key_env: OPENROUTER_API_KEY2` bucket that would have absorbed the whole failure,
+  because that entry didn't exist in the config when the session's process started.
+  **After editing `config.yaml` for any reason — Step 06, a manual fix, `hermes model`
+  changing the default — tell the user any already-open `hermes chat` session needs to
+  exit and reopen (`hermes --resume <session_id>` is enough, it's a fresh process) before
+  the new chain takes effect.** The Discord gateway does not need this — it reloads on
+  its own per the #60955 fix.
+- **(⚡ Hermes path) A "no signup, no key" free endpoint can start demanding auth without
+  warning — verify the whole chain periodically, not just at setup time.** OVHcloud AI
+  Endpoints' anonymous access (documented in this file and `GUIDE.md` as needing no key
+  at all) was live 2026-08-22 and returned `403 Forbidden ... generate a new one at
+  .../oauth/ovh/authorize` the very next day — a provider-side breaking change, not a
+  rate limit. Because Hermes treats a `403` as non-retryable, an entry like this sitting
+  at the bottom of the chain doesn't just fail quietly and end the chain — it **aborts
+  the whole turn** and surfaces the raw HTTP error to the user, which reads exactly like
+  the fallback setup itself is broken. Prune (or re-verify and re-key) any entry the
+  first time it produces this failure signature; don't assume "verified on date X" still
+  holds days later just because nothing else changed.
+- **(⚡ Hermes path) `/moa` mode can pin a session onto hardcoded paid models that bypass
+  the whole free-tier setup, and it looks exactly like a broken fallback chain.**
+  Confirmed: a session that had `/moa <prompt>` invoked at some earlier point stayed
+  pinned to MoA on every subsequent turn, including after a resume. MoA's default preset
+  runs two "reference" models before the main model ever gets a turn —
+  `openai-codex/gpt-5.5` and `openrouter/deepseek-v4-pro` — neither free, neither
+  necessarily funded, and **`auxiliary.free_only: true` does not reach MoA's model
+  selection at all**; it's a separate subsystem (`hermes_cli/config_defaults.py`'s `moa`
+  block), not part of `fallback_providers`. The visible symptom is a `402 Insufficient
+  credits` on `provider: moa, endpoint: moa://local` (the aggregator) plus two silent
+  reference-model failures, all *before* the real fallback chain is ever exercised — easy
+  to misdiagnose as the chain being broken when it's actually a different feature the
+  user (or an earlier turn) turned on and forgot about. Check for this first if a session
+  errors out immediately on providers that were never configured anywhere in
+  `fallback_providers`: run `hermes moa list` to see if a preset is active, and have the
+  user run `/model` in the live session to un-pin it if MoA isn't what they actually want.
+- **(⚡ Hermes path) Gemini's free tier is sized for chat, not for agent sessions — expect
+  it to run dry mid-session, not after days of use.** The free tier caps at 250,000
+  *input tokens per day, per model* (not just a request-rate limit), and Hermes's own
+  error message states the reason plainly: it makes 3–10 API calls per user turn, each
+  resending the full accumulated context, so a single long coding session can exhaust a
+  day's Gemini budget in a handful of turns. Confirmed live: a ~130-message coding
+  session hit `RESOURCE_EXHAUSTED` on both `gemini-2.5-flash` and `gemini-2.5-flash-lite`
+  the same day they were verified working. Don't treat a Gemini entry's daily cap as a
+  sign something is misconfigured — for agentic use this is normal, expected behavior,
+  and it's exactly why Gemini should never be the *only* bucket in the chain.
+- **(⚡ Hermes path) A credential-pool cooldown is honored silently for every chain entry
+  tied to that credential — including explicit `key_env` duplicates — with no log line
+  for the skip.** Confirmed: after a verification pass put OpenRouter acct-B into a
+  ~50-minute cooldown, a chain with six separate `fallback_providers` entries pinned to
+  `key_env: OPENROUTER_API_KEY2` (acct-B) showed *zero* attempts against any of them in
+  the turn log — the chain walk reached the end of the array and reported exhaustion
+  without ever visibly trying them. This is correct behavior (Hermes recognizing the
+  credential is still cooling down and declining to waste a call), not a bug — but it
+  reads exactly like those entries were skipped or misconfigured if you don't already
+  know the credential is in cooldown. Check `hermes auth list` for a
+  `rate-limited (429) (<time> left)` line before concluding a `key_env`-pinned entry
+  isn't working.
+- **(⚡ Hermes path) Re-verifying the chain spends the very quota it's protecting.**
+  Step 07's live-test burns one real request per entry, including every credential-pool
+  key. Confirmed: running the full verify pass against a 2-account OpenRouter pool put
+  the *second* (backup) account into its own 429 cooldown shortly after, for the same
+  reason the primary account was already capped — the check itself is not free. Verify
+  once after assembling the chain, not on every status question; re-verifying an
+  already-proven chain just to answer "is it still fine?" degrades the exact resilience
+  you're trying to confirm.
+- **(⚡ Hermes path) A chain padded with same-account `:free` models is one bucket with
+  many failure messages — confirmed live 2026-08-23.** A user's chain had nine
+  OpenRouter `:free` entries on one account (plus six more pinned to a
+  `key_env: OPENROUTER_API_KEY2` that was never written to `.env`). When the account's
+  50-request/day free cap hit zero, all nine 429'd in a row and the session died on the
+  last one — the chain looked thoroughly broken when it was really one exhausted bucket
+  plus dead entries. The setup that held up afterwards: `openrouter/free` as primary
+  (the router self-updates, so no stale model IDs), two OpenRouter `:free` fallbacks
+  max, Groq as the second bucket (`openai/gpt-oss-120b`, `qwen/qwen3.6-27b` — verified
+  live that day, 131K context), Gemini dead-last. Groq was the load-bearing second
+  bucket and cost nothing: the user already had the key sitting in `.env`;  it just wasn't in the chain.
+- **(⚡ Hermes path) The decoy `.env` — confirm which file Hermes actually reads before
+  touching any key.** Confirmed live 2026-08-23: keys lived in
+  `z:/Github/Hermes/.hermes/.env` (real, 25KB) while a near-identical
+  `z:/Github/Hermes/.env` (stale copy) sat at the project root and Hermes ignored it.
+  The session's static checks ran against the copy: real keys (`OPENROUTER_API_KEY2`,
+  `ZAI_API_KEY`) were reported missing, "duplicate" `GEMINI_API_KEY` lines were
+  "fixed" in the wrong file, and the chain was rewritten against an env file that
+  never loads. Everything resolved once the checks pointed at `<HERMES_HOME>/.env`.
+  Resolve it with `hermes config path`; confirm what Hermes sees with `hermes status`.
+- **(⚡ Hermes path) A valid key can still 404/403/timeout on the exact model you pin —
+  verify model-on-key, not key-alone.** Three cases confirmed live 2026-08-23:
+  (1) Gemini — `gemini-2.5-flash`/`-lite` return 404 "no longer available to new
+  users" on newer Google projects while `gemini-3.6-flash` answers on the same keys;
+  (2) GitHub Copilot — `gpt-4o` answers on the free plan, `gpt-4o-mini` returns 403
+  "not authorized to use this Copilot feature"; (3) NVIDIA NIM —
+  `deepseek-ai/deepseek-v4-flash-0731` times out past 180s while
+  `nvidia/nemotron-3.5-lightning-30b-a3b` answers on the same key. Each reads as a
+  dead bucket until you try a different model on the same key. Pin models that were
+  *called successfully on that key*; when an entry dies with 404/403, substitute a
+  sibling model before deleting the bucket.
+- **(⚡ Hermes path) Buckets verified free and live as of 2026-08-23** — Z.ai
+  `glm-4.5-flash` (`https://api.z.ai/api/paas/v4`, OpenAI-compatible); NVIDIA NIM
+  (`integrate.api.nvidia.com/v1`, native `provider: nvidia`, ~40 RPM / 1000 RPD per
+  key — four separate keys each served `nemotron-3.5-lightning-30b-a3b`); GitHub
+  Copilot via the gh token (native `provider: copilot`, small monthly chat quota —
+  emergency bucket); Groq `openai/gpt-oss-120b` + `qwen/qwen3.6-27b` (131K context);
+  OpenRouter's `openrouter/free` router as a self-updating primary. Free tiers change
+  constantly — treat this list as a snapshot, not a promise.
 
 ```
              ✦  unknown
