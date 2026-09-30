@@ -30,6 +30,7 @@ because free tiers change weekly.
 - [The shape you're aiming for](#the-shape-youre-aiming-for)
 - [Free buckets worth collecting](#free-buckets-worth-collecting)
 - [Known limits](#known-limits)
+- [Field notes](#field-notes)
 - [Further reading](#further-reading)
 - [Contributing](#contributing)
 
@@ -44,6 +45,7 @@ because free tiers change weekly.
 | Writing the fallback logic into your own code | **[`examples/python/fallback_chain.py`](examples/python/fallback_chain.py)** — a dependency-light reference implementation |
 | Configuring Hermes Agent or OpenClaw | **[`SETUP.agent.md`](SETUP.agent.md)** — tool-specific branches (marked ⚡) live in the same file, no separate download needed |
 | In a hurry, just want *something* free right now | Point at `openrouter/free` — see [below](#fast-path) — then come back and read the rest |
+| Your chain is built and something won't probe green | **[`FIELD-NOTES.md`](FIELD-NOTES.md)** — error signatures that lie: `403` that isn't a bad key, `401` that isn't a revoked key, `200` that isn't a working model |
 
 ---
 
@@ -182,6 +184,28 @@ or the whole product does: GitHub Models, playground and inference API alike, wa
 retired on 2026-07-30 with no successor free tier. Re-run `discover_free_models.py`
 every few weeks and prune what died. A chain entry that no longer exists burns a
 failover hop on every single request.
+
+---
+
+## Field notes
+
+Built chains fail in ways the catalog doesn't predict. These are the error
+signatures that show up when a probe lies to you — recorded from a live
+six-deep build, each one after a wrong "DEAD" verdict nearly deleted a working
+bucket:
+
+| You see | It is probably not |
+|---|---|
+| `403` from Groq or Cerebras | a bad key — it's a Cloudflare UA block |
+| `401 Invalid API Key` | a revoked key — often a key your own parser truncated |
+| `200` with empty content | a live model you under-funded (reasoning tokens) |
+| `429` | your balance — it's upstream capacity, and adding credits won't help |
+| a `:free` id billing you | misconfigured — some "free" ids route to paid backends after auth |
+
+[`FIELD-NOTES.md`](FIELD-NOTES.md) covers these with the measurements, plus how
+to tell whether a key is actually free before you trust it, and six concrete
+changes to `discover_free_models.py` that would have prevented every false
+negative in that build.
 
 ---
 
